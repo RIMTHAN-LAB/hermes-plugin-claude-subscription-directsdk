@@ -15,6 +15,48 @@ from urllib.parse import urlsplit
 
 UNCACHEABLE = ('thinking', 'redacted_thinking')
 
+# Opt-in: native runs in API-key mode against an operator-run HTTPS gateway that holds the
+# subscription, so the host holds only a gateway key. Exactly "1" turns it on.
+TRUSTED_GATEWAY = 'CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY'
+GATEWAY_REQUIRED = ('ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY')
+# A bearer or OAuth token would outrank or shadow the gateway key; a cloud backend would bypass
+# the gateway. Errors name these variables and never echo a value.
+GATEWAY_REFUSED = ('ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')
+BACKEND_FLAGS = ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')
+
+
+def flag_on(value):
+    return (value or '').lower() not in ('', '0', 'false', 'no', 'off')
+
+
+def trusted_gateway(env):
+    """The gateway's base URL when trusted-gateway mode is on, ``None`` when it is off.
+
+    Off (the default), nothing here runs and the subscription path is unchanged. On, the mode
+    admits exactly ANTHROPIC_BASE_URL (an https URL with no userinfo, query or fragment) and a
+    non-empty ANTHROPIC_API_KEY, and refuses every other credential or backend override."""
+    if env.get(TRUSTED_GATEWAY) != '1':
+        return None
+    refused = [key for key in GATEWAY_REFUSED if env.get(key)]
+    refused += [key for key in BACKEND_FLAGS if flag_on(env.get(key))]
+    if refused:
+        raise ValueError(f'{TRUSTED_GATEWAY}=1 refuses conflicting native auth/backend overrides: ' + ', '.join(refused))
+    missing = [key for key in GATEWAY_REQUIRED if not (env.get(key) or '').strip()]
+    if missing:
+        raise ValueError(f'{TRUSTED_GATEWAY}=1 requires ' + ' and '.join(missing))
+    base = env['ANTHROPIC_BASE_URL'].strip()
+    try:
+        url = urlsplit(base)
+        url.port  # Raises ValueError on a malformed port.
+        # '?' / '#' also catch an empty query or fragment, which urlsplit reports as ''.
+        valid = (url.scheme == 'https' and bool(url.hostname) and '@' not in url.netloc
+                 and '?' not in base and '#' not in base)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(f'{TRUSTED_GATEWAY}=1 requires ANTHROPIC_BASE_URL to be an https URL without credentials, query or fragment')
+    return base
+
 
 def _plain(block):
     return {k: v for k, v in block.items() if k != 'cache_control'} if isinstance(block, dict) else block

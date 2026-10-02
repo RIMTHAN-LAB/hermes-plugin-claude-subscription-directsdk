@@ -12,10 +12,10 @@ import subprocess
 import tempfile
 
 try:
-    from .admission import Admission
+    from .admission import Admission, trusted_gateway
     from .model_catalog import MODEL_METADATA, native_model
 except ImportError:
-    from admission import Admission
+    from admission import Admission, trusted_gateway
     from model_catalog import MODEL_METADATA, native_model
 
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH). Install it with "
@@ -79,8 +79,12 @@ def discover_models(command=None, env=None, timeout=40):
     # account's picker reflects its entitlements.
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
+    try:
+        gateway = trusted_gateway(env)
+    except ValueError:
+        return None  # A misconfigured gateway falls back to the catalog; the request path names the fault.
     child = _child_env(env)
-    gate = Admission("https://api.anthropic.com", timeout)
+    gate = Admission(gateway or "https://api.anthropic.com", timeout)
     try:
         child["ANTHROPIC_BASE_URL"] = gate.url
         argv = resolved + ["-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format", "stream-json",

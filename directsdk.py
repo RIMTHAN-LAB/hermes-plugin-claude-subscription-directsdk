@@ -21,11 +21,11 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission
+    from .admission import Admission, trusted_gateway
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 except ImportError:
-    from admission import Admission
+    from admission import Admission, trusted_gateway
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 
@@ -510,7 +510,10 @@ class Client:
                 (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
                 mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
                 env = _with_windows_essentials(dict(self.env if self.env is not None else os.environ))
-                if self.env is None:
+                # Opt-in trusted-gateway mode replaces the inherited-override guard with its own
+                # stricter one; off, gateway is None and the guard below is unchanged.
+                gateway = trusted_gateway(env)
+                if gateway is None and self.env is None:
                     conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
@@ -529,7 +532,9 @@ class Client:
                 # Hermes owns budgets; native's replayed reminder invalidates cached history.
                 env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
+                # In gateway mode the relay's upstream is the operator gateway, and the gateway key
+                # stays in env: native runs in API-key mode and sends it through the relay unchanged.
+                request.admission = Admission(gateway or env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
                 env['ANTHROPIC_BASE_URL'] = request.admission.url
                 # Native settings apply env inside the process, avoiding execve's
                 # per-argument/environment-string limit for full Hermes schemas.
