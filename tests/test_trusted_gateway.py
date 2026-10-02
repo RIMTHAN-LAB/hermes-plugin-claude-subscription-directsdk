@@ -24,7 +24,7 @@ import directsdk
 FLAG = 'CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY'
 KEY = 'gw-test-key-not-a-secret'
 OVERRIDES = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY',
-             'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', FLAG)
+             'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', FLAG)
 GOOD = {FLAG: '1', 'ANTHROPIC_BASE_URL': 'https://gateway.example.test/anthropic', 'ANTHROPIC_API_KEY': KEY}
 REQUEST = dict(model='sonnet', messages=[{'role': 'user', 'content': 'fixture'}])
 
@@ -105,6 +105,7 @@ def test_on_refuses_a_missing_url_or_key(missing, blank):
 @pytest.mark.parametrize('key,value', [
     ('ANTHROPIC_AUTH_TOKEN', 'secret-bearer'), ('ANTHROPIC_FOUNDRY_API_KEY', 'secret-foundry'),
     ('CLAUDE_CODE_OAUTH_TOKEN', 'secret-oauth'),
+    ('ANTHROPIC_CUSTOM_HEADERS', 'Authorization: Bearer secret-smuggled'),
     ('CLAUDE_CODE_USE_BEDROCK', '1'), ('CLAUDE_CODE_USE_VERTEX', 'true'), ('CLAUDE_CODE_USE_FOUNDRY', 'yes'),
 ])
 def test_on_still_refuses_other_credentials_and_backends(key, value):
@@ -184,7 +185,22 @@ def plain_ssl():
             truststore.inject_into_ssl()
 
 
-def test_on_relay_forwards_once_to_the_gateway_with_native_headers_key_and_body(clean_env, plain_ssl, tmp_path):
+PLAIN_BODY = '{"model":"claude-sonnet-5-5","max_tokens":64,"messages":[{"role":"user","content":"fixture"}]}'
+# Native's breakpoint sits on per-request context it appended after the queried frame; the
+# relay's existing pinning (every mode) moves it back onto the frame Hermes queried.
+MARKED = {'model': 'claude-sonnet-5-5', 'max_tokens': 64, 'messages': [{'role': 'user', 'content': [
+    {'type': 'text', 'text': 'fixture'},
+    {'type': 'text', 'text': '<system-reminder>today</system-reminder>', 'cache_control': {'type': 'ephemeral'}}]}]}
+PINNED = {**MARKED, 'messages': [{'role': 'user', 'content': [
+    {'type': 'text', 'text': 'fixture', 'cache_control': {'type': 'ephemeral'}},
+    {'type': 'text', 'text': '<system-reminder>today</system-reminder>'}]}]}
+
+
+@pytest.mark.parametrize('body,expected', [
+    (PLAIN_BODY, PLAIN_BODY.encode()),
+    (json.dumps(MARKED), json.dumps(PINNED, separators=(',', ':')).encode()),
+], ids=['unmarked-body-byte-identical', 'one-breakpoint-pinned'])
+def test_on_relay_forwards_once_to_the_gateway_with_native_headers_key_and_body(clean_env, plain_ssl, tmp_path, body, expected):
     cert, key = _certificate(tmp_path)
     seen = []
     usage = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}
@@ -219,15 +235,15 @@ def test_on_relay_forwards_once_to_the_gateway_with_native_headers_key_and_body(
     default_context = ssl.create_default_context
     clean_env.setattr(admission.ssl, 'create_default_context', lambda *a, **k: default_context(cafile=str(cert)))
 
-    body = '{"model":"claude-sonnet-5-5","max_tokens":64,"messages":[{"role":"user","content":"fixture"}]}'
     native = tmp_path / 'native.py'
     native.write_text(NATIVE)
     gateway = f'https://127.0.0.1:{server.server_port}/anthropic'
     for name, value in {FLAG: '1', 'ANTHROPIC_BASE_URL': gateway, 'ANTHROPIC_API_KEY': KEY, 'FIXTURE_BODY': body}.items():
         clean_env.setenv(name, value)
     client = directsdk.Client(command=[sys.executable, str(native)])
+    request = REQUEST if body == PLAIN_BODY else {**REQUEST, 'messages': [{'role': 'user', 'content': [{'type': 'text', 'text': 'fixture'}]}]}
     try:
-        result = client.create(**REQUEST)
+        result = client.create(**request)
     finally:
         client.close()
         server.shutdown()
@@ -248,7 +264,8 @@ def test_on_relay_forwards_once_to_the_gateway_with_native_headers_key_and_body(
     # Native itself was pointed at the loopback relay, never straight at the gateway.
     assert headers['x-fixture-child-base'].startswith('http://127.0.0.1:')
     assert '/admit/' in headers['x-fixture-child-base']
-    assert request['body'] == body.encode()
+    # Unchanged, except the plugin's existing single-breakpoint pinning (README: Ownership and replay).
+    assert request['body'] == expected
     assert result.usage.model_dump()['native_admission']['upstream_requests'] == 1
     assert result.usage.model_dump()['native_admission']['blocked_requests'] == 1
 
@@ -265,3 +282,49 @@ def test_discovery_in_gateway_mode(profile, tmp_path):
     assert rows and all(row['upstream_requests'] == 0 for row in rows)
     bad = {**env, **GOOD, 'ANTHROPIC_BASE_URL': 'http://gateway.example.test'}
     assert profile.discover_models(command=command, env=bad) is None
+
+
+def test_setup_status_reports_gateway_mode_even_when_auth_status_is_logged_out(profile, tmp_path):
+    """The CLI's own `auth status` may read logged out in API-key mode; setup must not send a box
+    to `claude auth login`, and discovery still lists the live picker."""
+    from directsdk_setup import GATEWAY_STATUS, LOGIN_HINT, setup_status
+    from test_directsdk_setup import PINNED_PICKER, PRO, _cli
+    logged_out = {**PRO, 'auth': {'loggedIn': False}, 'models': PINNED_PICKER}
+    command, env = _cli(tmp_path, logged_out)
+    env = {k: v for k, v in env.items() if k not in OVERRIDES}
+    assert setup_status(command=command, env=env)['logged_in'] is False  # off: unchanged
+    assert setup_status(command=command, env=env)['detail'] == LOGIN_HINT
+    status = setup_status(command=command, env={**env, **GOOD})
+    assert status['available'] and status['logged_in'] and status['detail'] == GATEWAY_STATUS
+    assert status['login_command'] is None and KEY not in json.dumps(status)
+    rows = profile.discover_models(command=command, env={**env, **GOOD})
+    assert rows and all(row['upstream_requests'] == 0 for row in rows)
+    bad = setup_status(command=command, env={**env, **GOOD, 'ANTHROPIC_API_KEY': ''})
+    assert not bad['logged_in'] and 'ANTHROPIC_API_KEY' in bad['detail'] and bad['login_command'] is None
+
+
+def test_gateway_auth_failure_names_the_gateway_not_the_login(clean_env, tmp_path):
+    from directsdk_setup import GATEWAY_AUTH_HINT, LOGGED_OUT_HINT
+    native = tmp_path / 'native.py'
+    native.write_text(r'''
+import json, sys
+for line in sys.stdin:
+    if json.loads(line).get('shouldQuery') is False:
+        print(json.dumps({'type': 'result', 'num_turns': 0}), flush=True)
+        continue
+    break
+print(json.dumps({'type': 'assistant', 'error': 'authentication_failed', 'is_api_error_message': True, 'message': {'role': 'assistant', 'model': '<synthetic>', 'content': [{'type': 'text', 'text': 'Invalid API key'}], 'stop_reason': 'stop_sequence'}}), flush=True)
+print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': True, 'num_turns': 1, 'result': 'Invalid API key'}), flush=True)
+sys.exit(1)
+''')
+    for name, value in GOOD.items():
+        clean_env.setenv(name, value)
+    client = directsdk.Client(command=[sys.executable, str(native)])
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            client.create(**REQUEST)
+    finally:
+        client.close()
+    message = str(caught.value)
+    assert not isinstance(caught.value, directsdk.ClaudeCodeLoggedOut)
+    assert GATEWAY_AUTH_HINT in message and LOGGED_OUT_HINT not in message and KEY not in message

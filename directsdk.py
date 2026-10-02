@@ -23,11 +23,11 @@ from types import SimpleNamespace
 try:
     from .admission import Admission, trusted_gateway
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
+    from .directsdk_setup import INSTALL_HINT, GATEWAY_AUTH_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 except ImportError:
     from admission import Admission, trusted_gateway
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
+    from directsdk_setup import INSTALL_HINT, GATEWAY_AUTH_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 
 
 class ClaudeCodeMissing(RuntimeError):
@@ -642,6 +642,9 @@ class Client:
                 if native_error and not native_failure_handled:
                     if native_error_code == 'authentication_failed' and not admission.used:
                         # No usable login where Hermes runs native: it refuses before any upstream request; only its /api/hello pre-flight reaches the relay.
+                        if gateway is not None:
+                            # API-key mode against the operator gateway: a login is not the fix.
+                            raise RuntimeError(f'{GATEWAY_AUTH_HINT} (native: {native_error})')
                         raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error})')
                     raise RuntimeError('Native API error: ' + native_error)
                 if len(results) != 1 or not assistants or not stopped:

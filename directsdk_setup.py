@@ -24,6 +24,10 @@ LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login
 LOGGED_OUT_HINT = ("Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` "
                    "as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in Hermes' environment, "
                    "or point CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR at a logged-in config directory, then try again.")
+GATEWAY_STATUS = ("Trusted gateway mode (CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY=1): Claude Code authenticates to "
+                  "ANTHROPIC_BASE_URL with ANTHROPIC_API_KEY; no `claude auth login` is needed.")
+GATEWAY_AUTH_HINT = ("Claude Code reported no usable credential in trusted gateway mode. Check that ANTHROPIC_API_KEY holds a "
+                     "valid gateway key for ANTHROPIC_BASE_URL in the environment Hermes runs it in; `claude auth login` does not apply.")
 
 
 def _resolve(command, env):
@@ -56,6 +60,14 @@ def setup_status(command=None, env=None, timeout=20):
     resolved = _resolve(command, env)
     if resolved is None:
         return {"available": False, "logged_in": False, "plan": "", "detail": INSTALL_HINT, "login_command": None}
+    # In trusted-gateway mode the CLI runs in API-key mode against the operator gateway: its own
+    # `auth status` login state is irrelevant (and may read logged out), so report the mode.
+    try:
+        gateway = trusted_gateway(env)
+    except ValueError as error:
+        return {"available": True, "logged_in": False, "plan": "", "detail": str(error), "login_command": None}
+    if gateway is not None:
+        return {"available": True, "logged_in": True, "plan": "", "detail": GATEWAY_STATUS, "login_command": None}
     login_command = resolved + ["auth", "login"]
     try:
         run = subprocess.run(resolved + ["auth", "status"], env=_child_env(env), stdin=subprocess.DEVNULL,

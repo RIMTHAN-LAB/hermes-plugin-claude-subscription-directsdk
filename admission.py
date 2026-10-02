@@ -20,8 +20,11 @@ UNCACHEABLE = ('thinking', 'redacted_thinking')
 TRUSTED_GATEWAY = 'CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY'
 GATEWAY_REQUIRED = ('ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY')
 # A bearer or OAuth token would outrank or shadow the gateway key; a cloud backend would bypass
-# the gateway. Errors name these variables and never echo a value.
-GATEWAY_REFUSED = ('ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')
+# the gateway; custom headers could carry a second credential (an `Authorization: Bearer ...`)
+# that the relay would forward to a host that is not Anthropic. Errors name these variables and
+# never echo a value.
+GATEWAY_REFUSED = ('ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN',
+                   'ANTHROPIC_CUSTOM_HEADERS')
 BACKEND_FLAGS = ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')
 
 
