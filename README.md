@@ -54,7 +54,7 @@ claude auth login
 hermes --provider claude-subscription-directsdk-experimental -m sonnet
 ```
 
-Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client.
+Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client; the only API-key path is the explicit, opt-in [trusted gateway](#trusted-gateway-operator-run) mode.
 
 Subscription entitlement and extra-usage settings still belong to the account and native service. Disable extra usage in the account if you do not want overage billing. A native list-price cost estimate is not proof of a subscription charge.
 
@@ -76,6 +76,33 @@ model:
 ```
 
 Auxiliary/fallback routing remains owned by Hermes. Configure those routes explicitly if they must also use the subscription; this provider does not silently change other selected providers.
+
+## Trusted gateway (operator-run)
+
+An opt-in mode for hosts that must not hold a subscription credential at all, such as disposable sandboxes. An operator runs an HTTPS gateway that holds the Claude subscription and accepts its own capped, per-run keys. The host holds only a gateway key, and Hermes still reaches Claude through the unmodified official Claude Code CLI. The gateway is trusted to forward each request as it receives it; the plugin does not rewrite anything for it.
+
+| Variable | Value |
+| --- | --- |
+| `CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY` | exactly `1` turns the mode on. Any other value, or unset, leaves the subscription path unchanged |
+| `ANTHROPIC_BASE_URL` | the gateway's base URL. It must be `https://`, with no userinfo, query or fragment. A path prefix is kept, so `https://gw.example/anthropic` receives `POST /anthropic/v1/messages` |
+| `ANTHROPIC_API_KEY` | the gateway key, which must not be empty |
+
+What changes when the mode is on:
+
+- The inherited-environment guard admits exactly those two variables. It still refuses `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and the `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` / `CLAUDE_CODE_USE_FOUNDRY` flags. A missing key, or a missing or non-HTTPS base URL, is refused before Claude Code starts. Errors name the variables and never print their values.
+- The single-request admission relay forwards to the gateway instead of `https://api.anthropic.com`, using TLS with normal certificate verification.
+- Claude Code still talks only to the loopback relay, because the plugin points its `ANTHROPIC_BASE_URL` there. `ANTHROPIC_API_KEY` passes through, so the CLI runs in API-key mode. Its identity headers, its `x-api-key` header and the request body reach the gateway unchanged, and there is still exactly one upstream request per Hermes call.
+- Every other isolation flag is unchanged: no tools, no setting sources, strict MCP config, no session persistence, no compaction and no retries.
+- Model discovery's handshake relay also points at the gateway. That handshake sends no Messages request. With a misconfigured gateway, discovery falls back to the pinned catalog, and the request path reports the fault.
+
+```sh
+export CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY=1
+export ANTHROPIC_BASE_URL=https://gateway.example.internal
+export ANTHROPIC_API_KEY=...   # the per-run gateway key, never a subscription credential
+hermes --provider claude-subscription-directsdk-experimental -m sonnet
+```
+
+Only point this at a gateway you operate or trust: it receives every prompt and the key. The mode never forwards a subscription OAuth token anywhere, because it refuses `CLAUDE_CODE_OAUTH_TOKEN` and bearer tokens. Off, nothing on this page applies.
 
 ## Ownership and replay
 
