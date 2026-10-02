@@ -195,22 +195,25 @@ class Contract(unittest.TestCase):
     def test_fail_closed_and_cancellation(self):
         import directsdk
 
+        # Sonnet 5 accepts the disable; `sonnet` now names Sonnet 5.5, which does not.
         disabled = json.loads(
             directsdk.request_body(
-                {**self.request(), "extra_body": {"reasoning": {"enabled": False}}}
+                {**self.request(), "model": "claude-sonnet-5", "extra_body": {"reasoning": {"enabled": False}}}
             )[0]
         )
         self.assertEqual(disabled["thinking"], {"type": "disabled"})
         self.assertEqual(disabled["context_management"], {"edits": []})
         # Fable rejects the disable (HTTP 400 "thinking.type.disabled is not supported"), so a
         # caller's disable is omitted rather than sent: thinking stays on, the request survives.
-        mandatory = json.loads(
-            directsdk.request_body(
-                {**self.request(), "model": "fable", "extra_body": {"reasoning": {"enabled": False}}}
-            )[0]
-        )
-        self.assertNotIn("thinking", mandatory)
-        self.assertNotIn("context_management", mandatory)
+        # Sonnet 5.5 rejects it the same way (its thinking-off form is `between_tools`).
+        for model in ("fable", "sonnet", "claude-sonnet-5-5", "claude-sonnet-5-5[1m]"):
+            mandatory = json.loads(
+                directsdk.request_body(
+                    {**self.request(), "model": model, "extra_body": {"reasoning": {"enabled": False}}}
+                )[0]
+            )
+            self.assertNotIn("thinking", mandatory)
+            self.assertNotIn("context_management", mandatory)
         effort = json.loads(
             directsdk.request_body(
                 {**self.request(), "extra_body": {"reasoning": {"effort": "low"}}}

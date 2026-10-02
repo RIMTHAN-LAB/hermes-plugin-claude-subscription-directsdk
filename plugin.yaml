@@ -1,8 +1,8 @@
 name: claude-subscription-directsdk-experimental
 kind: model-provider
-version: 0.3.0
+version: 0.4.0
 manifest_version: 2
-description: Claude Subscription DirectSDK (Experimental) — drive your Claude Pro/Max subscription through the official Claude Code CLI; Hermes owns tools, approvals and compaction
+description: Claude Subscription DirectSDK (Experimental) — drive your Claude Pro/Max subscription through the official Claude Code CLI; Hermes owns tools, approvals and compaction. Optional trusted-gateway mode (CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY=1) routes the same CLI through an operator-run HTTPS gateway with a gateway key
 author: Nous Research
 license: MIT
 homepage: https://github.com/NousResearch/hermes-plugin-claude-subscription-directsdk
@@ -13,6 +13,7 @@ optional_env:
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR
   - CLAUDE_CONFIG_DIR
+  - CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY
 external_dependencies:
   - name: claude
     check: "claude --version"

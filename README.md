@@ -54,7 +54,7 @@ claude auth login
 hermes --provider claude-subscription-directsdk-experimental -m sonnet
 ```
 
-Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client.
+Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client; the only API-key path is the explicit, opt-in [trusted gateway](#trusted-gateway-operator-run) mode.
 
 Subscription entitlement and extra-usage settings still belong to the account and native service. Disable extra usage in the account if you do not want overage billing. A native list-price cost estimate is not proof of a subscription charge.
 
@@ -77,13 +77,40 @@ model:
 
 Auxiliary/fallback routing remains owned by Hermes. Configure those routes explicitly if they must also use the subscription; this provider does not silently change other selected providers.
 
+## Trusted gateway (operator-run)
+
+An opt-in mode for hosts that must not hold a subscription credential at all, such as disposable sandboxes. An operator runs an HTTPS gateway that holds the Claude subscription and accepts its own capped, per-run keys. The host holds only a gateway key, and Hermes still reaches Claude through the unmodified official Claude Code CLI. The gateway is trusted to forward each request as it receives it; the plugin does not rewrite anything for it.
+
+| Variable | Value |
+| --- | --- |
+| `CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY` | exactly `1` turns the mode on. Any other value, or unset, leaves the subscription path unchanged |
+| `ANTHROPIC_BASE_URL` | the gateway's base URL. It must be `https://`, with no userinfo, query or fragment. A path prefix is kept, so `https://gw.example/anthropic` receives `POST /anthropic/v1/messages` |
+| `ANTHROPIC_API_KEY` | the gateway key, which must not be empty |
+
+What changes when the mode is on:
+
+- The inherited-environment guard admits exactly those two variables. It still refuses `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_CUSTOM_HEADERS` (it could smuggle a second credential, such as an `Authorization` header, to the gateway) and the `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX` / `CLAUDE_CODE_USE_FOUNDRY` flags. A missing key, or a missing or non-HTTPS base URL, is refused before Claude Code starts. Errors name the variables and never print their values.
+- The single-request admission relay forwards to the gateway instead of `https://api.anthropic.com`, using TLS with normal certificate verification.
+- Claude Code still talks only to the loopback relay, because the plugin points its `ANTHROPIC_BASE_URL` there. `ANTHROPIC_API_KEY` passes through, so the CLI runs in API-key mode. Its identity headers and its `x-api-key` header reach the gateway unchanged. The request body does too, except for the plugin's existing cache-breakpoint pinning, which applies in every mode: when the body carries exactly one message `cache_control` marker, the relay may move it onto content the next request replays and re-serialise the JSON (see [Ownership and replay](#ownership-and-replay)). There is still exactly one upstream request per Hermes call.
+- Every other isolation flag is unchanged: no tools, no setting sources, strict MCP config, no session persistence, no compaction and no retries.
+- Model discovery's handshake relay also points at the gateway. That handshake sends no Messages request. With a misconfigured gateway, discovery falls back to the pinned catalog, and the request path reports the fault.
+
+```sh
+export CLAUDE_SUBSCRIPTION_DIRECTSDK_TRUSTED_GATEWAY=1
+export ANTHROPIC_BASE_URL=https://gateway.example.internal
+export ANTHROPIC_API_KEY=...   # the per-run gateway key, never a subscription credential
+hermes --provider claude-subscription-directsdk-experimental -m sonnet
+```
+
+Only point this at a gateway you operate or trust: it receives every prompt and the key. The mode never forwards a subscription OAuth token anywhere, because it refuses `CLAUDE_CODE_OAUTH_TOKEN`, bearer tokens and custom headers. `hermes model` setup reports the mode as ready without a `claude auth login`, and a Claude Code authentication failure names the gateway variables instead of the login hint. Off, nothing on this page applies.
+
 ## Ownership and replay
 
 Each `chat.completions.create` starts a fresh process in a private temporary directory. Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, has inert callbacks, and is denied execution by native `dontAsk`. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.
 
 Canonical history is replayed in order. Historical user frames use `shouldQuery:false`, each with a zero-turn acknowledgment; the final user/tool-result frame queries. There is no parked native session or native approval wait, and the adapter adds no synthetic continue prompt. The local admission relay prevents native recovery from issuing another upstream request. The native token-budget reminder is disabled because Hermes owns budgets and replay reconstructs that reminder across the cache boundary. Other native annotations remain present, so the wire prompt is not byte-identical Hermes-only context.
 
-The relay binds an ephemeral loopback port with a random per-request route. Native authorization headers pass through memory directly to the upstream; headers are not logged or persisted. The upstream request body and native identity headers are preserved, while HTTP transfer encoding is normalized. The relay captures streamed text, signed thinking, tool arguments, usage and stop reason before native recovery can replace them. Cancellation shuts down the active upstream connection and the native process; request teardown removes the listener. No external relay service or bundled vendor executable is required.
+The relay binds an ephemeral loopback port with a random per-request route. Native authorization headers pass through memory directly to the upstream; headers are not logged or persisted. Native identity headers are preserved, and so is the upstream request body, with one exception: when native marks exactly one message block with `cache_control`, the relay moves that breakpoint back onto content the next request replays unchanged (never later, content untouched) and re-serialises the JSON, so the cached prefix recurs across tool rounds. HTTP transfer encoding is normalized. The relay captures streamed text, signed thinking, tool arguments, usage and stop reason before native recovery can replace them. Cancellation shuts down the active upstream connection and the native process; request teardown removes the listener. No external relay service or bundled vendor executable is required.
 
 ### Long-context caching qualification
 
@@ -137,6 +164,7 @@ The picker exposes these explicit native routes:
 
 | Model | Native selection | Context |
 | --- | --- | --- |
+| Sonnet 5.5 | `claude-sonnet-5-5[1m]` | 1,000,000 |
 | Sonnet 5 | `claude-sonnet-5[1m]` | 1,000,000 |
 | Haiku 4.5 | `claude-haiku-4-5-20251001` | 200,000 |
 | Opus 5.5 | `claude-opus-5-5[1m]` | 1,000,000 |
@@ -144,7 +172,7 @@ The picker exposes these explicit native routes:
 | Opus 4.8 | `claude-opus-4-8[1m]` | 1,000,000 |
 | Fable 5.1 | `claude-fable-5-1[1m]` | 1,000,000 |
 
-Short names `sonnet`, `haiku`, `opus` and `fable` resolve to the corresponding pinned routes above. Known 1M model IDs also receive the native `[1m]` suffix automatically; Haiku does not. Unknown model IDs pass through unchanged and are never promised 1M: a plain one reports the 200K window native Claude Code applies to an unverifiable id behind the relay, so Hermes' own family-name guess (which would size `claude-opus-5-5` at 1M before it was pinned) cannot budget past it; an unknown `[1m]` id reports nothing, and no Hermes estimate for it exceeds the native 1M. An explicit Hermes `model.context_length` still overrides the host's window, including a smaller compaction budget.
+Short names `sonnet`, `haiku`, `opus` and `fable` resolve to the corresponding pinned routes above. In this fork `sonnet` resolves to Sonnet 5.5 (`claude-sonnet-5-5[1m]`), never to Sonnet 5, and so does the auxiliary default: Sonnet 5 is reachable only by its full id `claude-sonnet-5`. Sonnet 5.5, like Fable, rejects `thinking: {"type": "disabled"}` with a 400, so a caller's disable is omitted for it and thinking stays on at the model's default effort. Known 1M model IDs also receive the native `[1m]` suffix automatically; Haiku does not. Unknown model IDs pass through unchanged and are never promised 1M: a plain one reports the 200K window native Claude Code applies to an unverifiable id behind the relay, so Hermes' own family-name guess (which would size `claude-opus-5-5` at 1M before it was pinned) cannot budget past it; an unknown `[1m]` id reports nothing, and no Hermes estimate for it exceeds the native 1M. An explicit Hermes `model.context_length` still overrides the host's window, including a smaller compaction budget.
 
 The local relay sets `ANTHROPIC_BASE_URL`, which makes Claude Code apply its gateway defaults. Its documented Sonnet 5 gateway default is 200K unless `[1m]` is selected; this was the cause of the earlier downgrade, not evidence of a general subscription limit. Both native argv and Hermes metadata now select the same window. See [Claude Code model configuration](https://code.claude.com/docs/en/model-config#sonnet-5-context-window).
 
