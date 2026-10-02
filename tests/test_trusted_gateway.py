@@ -227,6 +227,7 @@ def test_on_relay_forwards_once_to_the_gateway_with_native_headers_key_and_body(
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Gateway)
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(str(cert), str(key))
     server.socket = tls.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
