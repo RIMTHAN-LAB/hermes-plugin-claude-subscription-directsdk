@@ -56,7 +56,8 @@ print(json.dumps({'type': 'result', 'subtype': 'success', 'usage': {'input_token
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    for key in OVERRIDES:
+    # A developer's own proxy settings must not route the loopback fixtures (test_relay_proxy.py covers the proxy).
+    for key in OVERRIDES + ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy'):
         monkeypatch.delenv(key, raising=False)
     return monkeypatch
 

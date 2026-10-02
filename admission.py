@@ -1,4 +1,5 @@
 """Request-scoped native HTTP admission; credentials are forwarded, never persisted."""
+import base64
 import codecs
 import copy
 import http.client
@@ -10,7 +11,8 @@ import secrets
 import socket
 import ssl
 import threading
-from urllib.parse import urlsplit
+import urllib.request
+from urllib.parse import unquote, urlsplit
 
 
 UNCACHEABLE = ('thinking', 'redacted_thinking')
@@ -175,6 +177,35 @@ class Capture:
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
+def proxy_tunnel(target):
+    """The CONNECT tunnel the environment's proxy settings give an HTTPS upstream, as
+    ``(proxy_host, proxy_port, headers)``, or None for a direct connection.
+
+    A sandbox may reach the internet only through an egress proxy (``HTTPS_PROXY`` / ``ALL_PROXY``,
+    with ``NO_PROXY``), which native honours for its own requests. The relay honours it the same
+    way, so the upstream's name is resolved by the proxy, never here. Only an ``http://`` proxy can
+    carry the tunnel; anything else is refused by naming the variable, never echoing its value
+    (it may carry credentials)."""
+    if urllib.request.proxy_bypass_environment(target.hostname):
+        return None
+    proxies = urllib.request.getproxies_environment()
+    raw = proxies.get('https') or proxies.get('all')
+    if not raw:
+        return None
+    proxy = urlsplit(raw if '://' in raw else 'http://' + raw)
+    try:
+        port = proxy.port or 80
+    except ValueError:
+        raise ValueError('HTTPS_PROXY names an invalid port') from None
+    if proxy.scheme != 'http' or not proxy.hostname:
+        raise ValueError('HTTPS_PROXY must be an http:// proxy for the relay to tunnel through it')
+    headers = {}
+    if proxy.username is not None:
+        credentials = unquote(proxy.username) + ':' + unquote(proxy.password or '')
+        headers['Proxy-Authorization'] = 'Basic ' + base64.b64encode(credentials.encode()).decode('ascii')
+    return proxy.hostname, port, headers
+
+
 class Admission:
     def __init__(self, upstream, timeout, queried=None):
         self.upstream = urlsplit(upstream)
@@ -259,7 +290,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             target = gate.upstream
             if target.scheme == 'https':
-                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
+                tunnel = proxy_tunnel(target)
+                host, port = (tunnel[0], tunnel[1]) if tunnel else (target.hostname, target.port)
+                conn = http.client.HTTPSConnection(host, port, timeout=gate.timeout, context=ssl.create_default_context())
+                if tunnel:
+                    # TLS (SNI and verification) is still the upstream's: the proxy only carries bytes.
+                    conn.set_tunnel(target.hostname, target.port, headers=tunnel[2])
             else:
                 conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
             conn.connect()
