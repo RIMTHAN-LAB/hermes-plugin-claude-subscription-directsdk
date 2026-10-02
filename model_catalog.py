@@ -1,5 +1,6 @@
 """Pinned native routes; a loopback gateway needs explicit long-context selection."""
 CONTEXT_WINDOWS = {
+    'claude-sonnet-5-5': 1_000_000,
     'claude-sonnet-5': 1_000_000,
     'claude-haiku-4-5-20251001': 200_000,
     'claude-opus-5-5': 1_000_000,
@@ -9,10 +10,14 @@ CONTEXT_WINDOWS = {
 }
 # Families that 400 on ``thinking: {"type": "disabled"}`` (the same contract Hermes core keeps
 # in agent/anthropic_adapter.py). A caller's disable is omitted for them: thinking stays on at
-# the model's default, which beats a dead request.
-MANDATORY_THINKING = ('claude-fable',)
+# the model's default, which beats a dead request. Sonnet 5.5 400s on the disable too (its only
+# thinking-off form is ``between_tools``); Sonnet 5 accepts it, and the prefix match below keeps
+# the two apart because 'claude-sonnet-5'.startswith('claude-sonnet-5-5') is False.
+MANDATORY_THINKING = ('claude-fable', 'claude-sonnet-5-5')
+# `sonnet` is Sonnet 5.5 in this fork: the operator never selects Sonnet 5 implicitly. Sonnet 5
+# stays reachable only by its full id, claude-sonnet-5.
 ALIASES = {
-    'sonnet': 'claude-sonnet-5',
+    'sonnet': 'claude-sonnet-5-5',
     'haiku': 'claude-haiku-4-5-20251001',
     'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
     'opus': 'claude-opus-5-5',

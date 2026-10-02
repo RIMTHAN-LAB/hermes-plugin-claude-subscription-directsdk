@@ -137,6 +137,7 @@ The picker exposes these explicit native routes:
 
 | Model | Native selection | Context |
 | --- | --- | --- |
+| Sonnet 5.5 | `claude-sonnet-5-5[1m]` | 1,000,000 |
 | Sonnet 5 | `claude-sonnet-5[1m]` | 1,000,000 |
 | Haiku 4.5 | `claude-haiku-4-5-20251001` | 200,000 |
 | Opus 5.5 | `claude-opus-5-5[1m]` | 1,000,000 |
@@ -144,7 +145,7 @@ The picker exposes these explicit native routes:
 | Opus 4.8 | `claude-opus-4-8[1m]` | 1,000,000 |
 | Fable 5.1 | `claude-fable-5-1[1m]` | 1,000,000 |
 
-Short names `sonnet`, `haiku`, `opus` and `fable` resolve to the corresponding pinned routes above. Known 1M model IDs also receive the native `[1m]` suffix automatically; Haiku does not. Unknown model IDs pass through unchanged and are never promised 1M: a plain one reports the 200K window native Claude Code applies to an unverifiable id behind the relay, so Hermes' own family-name guess (which would size `claude-opus-5-5` at 1M before it was pinned) cannot budget past it; an unknown `[1m]` id reports nothing, and no Hermes estimate for it exceeds the native 1M. An explicit Hermes `model.context_length` still overrides the host's window, including a smaller compaction budget.
+Short names `sonnet`, `haiku`, `opus` and `fable` resolve to the corresponding pinned routes above. In this fork `sonnet` resolves to Sonnet 5.5 (`claude-sonnet-5-5[1m]`), never to Sonnet 5, and so does the auxiliary default: Sonnet 5 is reachable only by its full id `claude-sonnet-5`. Sonnet 5.5, like Fable, rejects `thinking: {"type": "disabled"}` with a 400, so a caller's disable is omitted for it and thinking stays on at the model's default effort. Known 1M model IDs also receive the native `[1m]` suffix automatically; Haiku does not. Unknown model IDs pass through unchanged and are never promised 1M: a plain one reports the 200K window native Claude Code applies to an unverifiable id behind the relay, so Hermes' own family-name guess (which would size `claude-opus-5-5` at 1M before it was pinned) cannot budget past it; an unknown `[1m]` id reports nothing, and no Hermes estimate for it exceeds the native 1M. An explicit Hermes `model.context_length` still overrides the host's window, including a smaller compaction budget.
 
 The local relay sets `ANTHROPIC_BASE_URL`, which makes Claude Code apply its gateway defaults. Its documented Sonnet 5 gateway default is 200K unless `[1m]` is selected; this was the cause of the earlier downgrade, not evidence of a general subscription limit. Both native argv and Hermes metadata now select the same window. See [Claude Code model configuration](https://code.claude.com/docs/en/model-config#sonnet-5-context-window).
 
