@@ -21,11 +21,11 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission, trusted_gateway
+    from .admission import TRUSTED_GATEWAY, Admission, trusted_gateway
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import INSTALL_HINT, GATEWAY_AUTH_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 except ImportError:
-    from admission import Admission, trusted_gateway
+    from admission import TRUSTED_GATEWAY, Admission, trusted_gateway
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import INSTALL_HINT, GATEWAY_AUTH_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude
 
@@ -36,6 +36,30 @@ class ClaudeCodeMissing(RuntimeError):
 
 class ClaudeCodeLoggedOut(RuntimeError):
     """Claude Code refused before any upstream request because it has no usable login where Hermes runs it."""
+
+
+class AuxiliaryCallRefused(RuntimeError):
+    """Trusted-gateway mode serves only the main agent: a Hermes auxiliary call never runs Claude Code.
+
+    Hermes retries a failed explicitly routed auxiliary task once on the session's live provider,
+    with no setting to turn that off. The 400 and the wording are the route-incompatible class
+    Hermes' auxiliary fallback records as a failed candidate: it marks this provider unhealthy for
+    auxiliary routing and moves on (or raises the primary error), never a retry or parameter rung."""
+    status_code = 400
+
+
+def auxiliary_task():
+    """The Hermes auxiliary task this call runs inside, else ``None``.
+
+    Hermes binds ``agent.auxiliary_client._RELAY_AUX_CALL_CONTEXT`` for the whole of each
+    ``call_llm`` / ``async_call_llm`` (``_relay_auxiliary_call``), fallback hops included, and
+    copies the context into its provider threads. Read from the loaded module only: when Hermes'
+    auxiliary client was never imported, no auxiliary call is in flight."""
+    scope = getattr(sys.modules.get('agent.auxiliary_client'), '_RELAY_AUX_CALL_CONTEXT', None)
+    context = scope.get() if scope is not None else None
+    if context is None:
+        return None
+    return str(context.get('task') or 'unknown') if isinstance(context, dict) else 'unknown'
 
 
 CARRIER = 'claude-subscription-directsdk-experimental.native_assistant'
@@ -475,6 +499,13 @@ class Client:
             raise
 
     def _create(self, **kwargs):
+        # Off, the subscription path keeps upstream behaviour; on, auxiliary work stays on the router.
+        if (self.env if self.env is not None else os.environ).get(TRUSTED_GATEWAY) == '1':
+            task = auxiliary_task()
+            if task is not None:
+                raise AuxiliaryCallRefused(
+                    f'Claude Code does not support this model for Hermes auxiliary task {task!r}: '
+                    f'{TRUSTED_GATEWAY}=1 runs only the main agent\'s turns, never auxiliary work')
         body, manifest, names = request_body(kwargs)
         system, frames = prepare_history(kwargs.get('messages', []))
         if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
